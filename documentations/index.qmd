@@ -1,0 +1,61 @@
+---
+title: "{{PROJECT_TITLE_CASE}} Pollen Detection Pipeline"
+subtitle: "Scaling from 18k Zeiss Scans to Deep Learning Insights"
+image: /home/meow/Documents/Antigravity/{{PROJECT_DIR_NAME}}/sample_tiles/train/images/Ran_ado_20251031_001_pol_pro_Ran_ado_2025_32_{{DATETIME_MARKER}}_x000000_y000000.jpg
+---
+
+Welcome to the documentation for the **{{PROJECT_TITLE_CASE}} Pollen Detection** project. This pipeline is designed to handle high-resolution `.czi` (Zeiss) microscopy scans, segment individual pollen grains, and classify them by species using state-of-the-art **YOLOv8 Instance Segmentation** architectures.
+
+> [!IMPORTANT]
+> **Segmentation-Based**: All labeling in this project is performed as **Instance Segmentation** (polygons), not just bounding boxes. We utilize the enormous 40M parameter `yolov8l-seg.pt` model to trace exact, mathematically precise masks around pollen perimeters.
+
+## 🚀 Key Features
+
+- **High-Resolution Tiling**: Effortlessly process scans larger than 20,000 pixels by decomposing them into manageable training tiles.
+- **Max-Z Projection**: Automated MIP reduction to consolidate focus levels without losing detail.
+- **Rigorous 80/10/10 Split**: The pipeline enforces a strictly isolated 10% Test dataset, guaranteeing totally unbiased post-training evaluation metrics.
+- **Automated Negative Filtering**: 100% automated ingestion of purely empty background images to hyper-penalize false-positive debris detections.
+
+## 📦 Data Storage Policy
+
+To keep the repository lightweight and efficient, large datasets and model weights are **not** stored on GitHub. Instead, they are synchronized with the **CESNET S3 (S3.cl4.du.cesnet.cz)** storage.
+
+- **Source Scans**: Stored in `s3://bucket/{{S3_PREFIX}}/detect_images/`
+- **YOLO Datasets**: Stored dynamically via `s3://bucket/{{S3_PREFIX}}/Staged_area/` and `s3://bucket/{{S3_PREFIX}}/Staged_negatives/`
+- **Models**: Stored reliably in `s3://bucket/{{S3_PREFIX}}/trained_models/`
+
+## 🏷️ Roboflow Annotation
+
+While the pipeline relies heavily on high-throughput automated slicing and `pseudo_label.py` scripts natively, the human-in-the-loop manual curation for the base general pollen model is hosted externally. You can review, correct, and track the instance-segmentation polygon masks online:
+
+**[Roboflow: Pollen Lazy Labeling](https://app.roboflow.com/charles-university/pollen_lazy_labeling/7)**
+
+## 🛠️ Pipeline Overview
+
+::: {#fig-pipeline}
+```{mermaid}
+%%{init: {'theme': 'dark'}}%%
+graph LR
+  A["Raw .czi Scans"] --> B["MAX-Z Projection (MIP)"]
+  B --> C["640x640 Tiling"]
+  C --> D["Pseudo-Labeling / Curated Data"]
+  C --> E["Negative Filtering / Empty Tiles"]
+  D --> F["YOLOv8 Segmentation Training"]
+  E --> F
+  F --> G["General Pollen Detection Model"]
+  G --> H["Inference & Discovery"]
+```
+Pipeline from Raw Data to Biological Insights
+:::
+
+## 📖 Get Started
+
+Check the following sections to get up and running:
+
+- [Ingestion Tutorial](tutorials/ingestion.qmd): How to convert your first .czi folder.
+- **Training**: Set up GPU training using `src/train_pollen.py`.
+- **Pseudo-Labeling**: Auto-annotate tiles using `src/pseudo_label.py`.
+
+---
+
+*Project maintained by Jakub Štenc (CESNET / Prague).*

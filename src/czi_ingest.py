@@ -1,0 +1,554 @@
+#!/usr/bin/env python3
+"""
+czi_ingest.py — Convert .czi Zeiss scans into YOLO-ready training tiles.
+
+Pipeline:
+  1. Recursively scan a species root directory for .czi files
+  2. Extract species code from folder path (e.g. .../Ran_ado/Source/file.czi → Ran_ado)
+  3. Perform Max-Intensity Projection (MIP) across Z-slices (lazy via Dask)
+  4. Compose an RGB image from chosen fluorescence channels
+  5. Tile the composite into 640×640 patches with configurable overlap
+  6. Optionally run an existing YOLO model to auto-generate polygon annotations
+  7. Write YOLO dataset (images + labels + data.yaml) and a tile_manifest.json
+  8. Optionally upload the zipped dataset to CESNET S3
+
+Usage:
+    python czi_ingest.py \\
+        --root  /path/to/species_root_dir   \\
+        --out   /path/to/output_dataset_dir \\
+        --model /path/to/viability_best.pt  \\  # optional — for pseudo-labelling
+        --channels 0 1 2                    \\  # fluorescence channel indices
+        --z mip                             \\  # z-reduction strategy
+        --upload                               # push zipped dataset to S3
+
+Requirements:
+    pip install aicsimageio aicspylibczi "aicsimageio[czi]" pylibCZIrw
+    pip install ultralytics boto3 opencv-python-headless numpy
+"""
+
+import argparse
+import json
+import os
+import random
+import re
+import shutil
+import time
+import zipfile
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+# ── Optional imports (fail gracefully so unit tests can run without them) ──
+try:
+    from aicsimageio import AICSImage
+except ImportError:
+    AICSImage = None  # type: ignore
+
+try:
+    from ultralytics import YOLO
+except ImportError:
+    YOLO = None  # type: ignore
+
+try:
+    import boto3
+    from botocore.client import Config
+except ImportError:
+    boto3 = None  # type: ignore
+
+# ── Constants ──────────────────────────────────────────────────────────────
+TILE_SIZE           = 640
+DEFAULT_OVERLAP     = 0.20   # 20 % overlap between tiles
+DEFAULT_SPLIT_RATIO = 0.80   # 80 % train / 20 % val
+CONF_THRESHOLD      = 0.10   # Minimum confidence for pseudo-labels
+# Biologically reasonable pollen grain area in µm² (filters debris & dust)
+MIN_POLLEN_AREA_UM2 = 0.0
+MAX_POLLEN_AREA_UM2 = 9999999.0
+
+
+# ── Image utilities ────────────────────────────────────────────────────────
+
+def normalize_to_uint8(arr: np.ndarray) -> np.ndarray:
+    """Per-channel 0.5–99.5 percentile contrast stretch → uint8 RGB."""
+    out = np.zeros(arr.shape[:2] + (arr.shape[2],), dtype=np.uint8)
+    for c in range(arr.shape[2]):
+        ch = arr[..., c].astype(np.float32)
+        valid = ch[ch > 0]
+        if valid.size == 0:
+            continue
+        lo, hi = np.percentile(valid, [0.5, 99.5])
+        ch = np.clip((ch - lo) / (hi - lo + 1e-8), 0, 1) * 255.0
+        out[..., c] = ch.astype(np.uint8)
+    return out
+
+
+def get_mip_rgb(img, channels: list[int], grayscale: bool = False) -> np.ndarray:
+    """
+    Compute Maximum Intensity Projection across Z for the given channels.
+    Returns uint8 RGB array (H, W, 3).
+    """
+    # ── Check if the image is native RGB (Samples per pixel == 3) ──
+    if 'S' in img.dims.order and getattr(img.dims, 'S', 1) == 3:
+        # Extract native RGB directly. Brightfield usually has Z=1.
+        rgb = img.get_image_data("YXS", T=0, C=0, Z=0)
+        
+        if rgb.dtype != np.uint8:
+            if rgb.max() > 255:
+                rgb = (rgb / 256).astype(np.uint8)
+            else:
+                rgb = rgb.astype(np.uint8)
+                
+        if grayscale:
+            import cv2
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            rgb = np.stack([gray, gray, gray], axis=-1)
+            
+        return rgb
+
+    # ── Fallback to Fluorescence multi-channel extraction (CZYX) ──
+    dask_czyx = img.get_image_dask_data("CZYX", S=0)   # (C, Z, H, W)
+    num_c = dask_czyx.shape[0]
+    channels_data = []
+    
+    # Only iterate over channels that actually exist in the file
+    target_channels = [c for c in channels[:3] if c < num_c]
+    
+    for c in target_channels:
+        mip = dask_czyx[c].max(axis=0).compute()       # (H, W) — Z collapsed
+        channels_data.append(mip)
+
+    if grayscale and len(channels_data) > 0:
+        # Combine all active channels by taking maximum intensity across them
+        combined = np.max(np.stack(channels_data, axis=-1), axis=-1)
+        channels_data = [combined, combined, combined]
+    else:
+        # Pad to 3 channels if fewer than 3 were extracted
+        while len(channels_data) < 3:
+            if len(channels_data) > 0:
+                channels_data.append(np.zeros_like(channels_data[0]))
+            else:
+                # Fallback for empty image
+                channels_data.append(np.zeros((1024, 1024), dtype=np.uint8))
+
+        # If only one channel actually has meaningful data, duplicate it to make
+        # a proper grayscale image instead of a pure red image.
+        is_single_channel = (len(target_channels) == 1)
+        if is_single_channel:
+            active_ch = channels_data[0]
+            channels_data = [active_ch, active_ch, active_ch]
+
+    rgb = np.stack(channels_data, axis=-1)              # (H, W, 3)
+    return normalize_to_uint8(rgb)
+
+
+def tile_image(rgb: np.ndarray, tile_size: int = TILE_SIZE,
+               overlap: float = DEFAULT_OVERLAP):
+    """
+    Yield (tile_uint8, x_offset, y_offset) patches from an RGB image.
+    Pads incomplete border tiles with zeros.
+    """
+    H, W = rgb.shape[:2]
+    stride = int(tile_size * (1 - overlap))
+
+    for y in range(0, H, stride):
+        for x in range(0, W, stride):
+            crop = rgb[y:y + tile_size, x:x + tile_size]
+            # Skip tiny slivers at the far edges
+            if crop.shape[0] < tile_size // 4 or crop.shape[1] < tile_size // 4:
+                continue
+            if crop.shape[0] < tile_size or crop.shape[1] < tile_size:
+                padded = np.zeros((tile_size, tile_size, 3), dtype=np.uint8)
+                padded[:crop.shape[0], :crop.shape[1]] = crop
+                crop = padded
+            yield crop, x, y
+
+
+# ── Species metadata ───────────────────────────────────────────────────────
+
+def extract_species(czi_path: Path) -> str:
+    """
+    Infer species code from folder structure or filename.
+    1. Check for species patterns in filename (e.g. _Ran_ado_).
+    2. Check parent folders, skipping generic names like 'Source'.
+    """
+    # 1. Try filename pattern extraction (e.g. pol_pro_SPECIES_...)
+    filename = czi_path.name
+    # Common pattern in these files: ...pol_pro_([A-Za-z]+_[A-Za-z]+)...
+    match = re.search(r'pol_pro_([A-Za-z]{3}_[A-Za-z]{3})', filename)
+    if match:
+        return match.group(1)
+
+    # 2. Fallback to folder structure
+    parts = czi_path.resolve().parts
+    # Walk upward looking for a non-trivial folder that isn't 'Source', etc.
+    skip = {"Source", "source", "Data", "data", "Raw", "raw", "Scans", "scans"}
+    for part in reversed(parts[:-1]):
+        if part not in skip and not part.startswith("/"):
+            return part
+    return czi_path.parent.name
+
+
+def build_class_registry(root: str) -> dict[str, int]:
+    """
+    Recursively scan for .czi files and build a sorted species→class_id dict.
+    """
+    codes = sorted({extract_species(p) for p in Path(root).rglob("*.czi")})
+    return {code: idx for idx, code in enumerate(codes)}
+
+
+def extract_qr_code(filename: str) -> str | None:
+    """
+    Extract QR numeric code embedded in the ZEISS filename convention.
+    Pattern: YYYYMMDD_NNN_pol_pro_... → NNN
+    """
+    m = re.search(r'_(\d{3})_', filename)
+    return m.group(1) if m else None
+
+
+# ── YOLO pseudo-labelling ──────────────────────────────────────────────────
+
+def pseudo_label_tile(tile: np.ndarray, model,
+                      class_id: int,
+                      scale_um_px: float | None,
+                      conf: float = CONF_THRESHOLD) -> list[str]:
+    """
+    Run existing YOLO model on `tile`, re-assign class to `class_id`.
+    Optionally filter detections by physical size in µm².
+    Returns list of YOLO polygon annotation strings.
+    """
+    if model is None:
+        return []
+    H, W = tile.shape[:2]
+    results = model(tile, verbose=False, conf=conf, retina_masks=True)
+    lines = []
+    if results[0].masks is None:
+        if results[0].boxes is None:
+            return lines
+            
+        for box in results[0].boxes:
+            c_conf = float(box.conf[0])
+            if c_conf < conf:
+                continue
+                
+            # Physical size filter based on Bounding Box Area
+            if scale_um_px is not None:
+                w_px = float(box.xywh[0][2])
+                h_px = float(box.xywh[0][3])
+                area_px = w_px * h_px
+                area_um2 = area_px * (scale_um_px ** 2)
+                if not (MIN_POLLEN_AREA_UM2 < area_um2 < MAX_POLLEN_AREA_UM2):
+                    continue
+                    
+            # Convert normalized bounding box [x1, y1, x2, y2] into a polygon [x1, y1, x2, y1, x2, y2, x1, y2]
+            x1, y1, x2, y2 = box.xyxyn[0].tolist()
+            poly_str = f"{x1:.6f} {y1:.6f} {x2:.6f} {y1:.6f} {x2:.6f} {y2:.6f} {x1:.6f} {y2:.6f}"
+            lines.append((f"{class_id} {poly_str}", c_conf))
+        return lines
+
+    for mask_xy, box in zip(results[0].masks.xy, results[0].boxes):
+        if mask_xy.shape[0] < 3:
+            continue
+        c_conf = float(box.conf[0])
+        if c_conf < conf:
+            continue
+        # Physical size filter
+        if scale_um_px is not None:
+            pts = np.array(mask_xy, dtype=np.int32).reshape(-1, 1, 2)
+            area_px  = cv2.contourArea(pts)
+            area_um2 = area_px * (scale_um_px ** 2)
+            if not (MIN_POLLEN_AREA_UM2 < area_um2 < MAX_POLLEN_AREA_UM2):
+                continue
+
+        # Normalize coordinates to [0, 1]
+        norm = mask_xy.copy().astype(float)
+        norm[:, 0] /= W
+        norm[:, 1] /= H
+        coords_str = " ".join(f"{x:.6f} {y:.6f}" for x, y in norm)
+        lines.append((f"{class_id} {coords_str}", c_conf))
+
+    return lines
+
+
+# ── S3 helpers ─────────────────────────────────────────────────────────────
+
+def setup_s3():
+    s3_endpoint  = os.environ.get("S3_ENDPOINT", "https://s3.cl4.du.cesnet.cz")
+    s3_bucket    = os.environ.get("S3_BUCKET")
+    access_key   = os.environ.get("AWS_ACCESS_KEY_ID")
+    secret_key   = os.environ.get("AWS_SECRET_ACCESS_KEY")
+
+    if not all([s3_bucket, access_key, secret_key]):
+        return None, None
+
+    resource = boto3.resource(
+        "s3",
+        endpoint_url=s3_endpoint,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        config=Config(signature_version="s3v4", s3={"payload_signing_enabled": False}),
+    )
+    return resource, s3_bucket
+
+
+def upload_zip_to_s3(s3_resource, bucket: str, zip_path: str,
+                     s3_key: str) -> None:
+    """Upload zipped dataset to CESNET S3 staging area."""
+    import urllib.request, ssl
+    client = s3_resource.meta.client
+    url = client.generate_presigned_url(
+        "put_object",
+        Params={"Bucket": bucket, "Key": s3_key},
+        ExpiresIn=3600,
+    )
+    size = os.path.getsize(zip_path)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with open(zip_path, "rb") as fh:
+        req = urllib.request.Request(url, data=fh, method="PUT")
+        req.add_header("Content-Length", str(size))
+        with urllib.request.urlopen(req, context=ctx) as resp:
+            if resp.status == 200:
+                print(f"   ✅ Uploaded {os.path.basename(zip_path)} → s3://{bucket}/{s3_key}")
+            else:
+                print(f"   ⚠️ Upload returned status {resp.status}")
+
+
+# ── Main pipeline ──────────────────────────────────────────────────────────
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Convert .czi Zeiss scans to YOLO training tiles."
+    )
+    ap.add_argument("--root",     required=True, help="Species root directory")
+    ap.add_argument("--out",      required=True, help="Output YOLO dataset directory")
+    ap.add_argument("--model",    default=None,
+                    help="Path to existing best.pt for pseudo-labelling (optional)")
+    ap.add_argument("--channels", nargs="+", type=int, default=[0, 1, 2],
+                    help="CZI channel indices to map to RGB (default: 0 1 2)")
+    ap.add_argument("--z",        default="mip", choices=["mip"],
+                    help="Z-reduction method (only 'mip' supported)")
+    ap.add_argument("--grayscale", action="store_true",
+                    help="Combine fluorescence channels into a single grayscale representation")
+    ap.add_argument("--overlap",  type=float, default=DEFAULT_OVERLAP,
+                    help="Tile overlap fraction (default 0.20)")
+    ap.add_argument("--split",    type=float, default=DEFAULT_SPLIT_RATIO,
+                    help="Train split fraction (default 0.80)")
+    ap.add_argument("--conf",     type=float, default=CONF_THRESHOLD,
+                    help="YOLO confidence threshold for pseudo-labels")
+    ap.add_argument("--upload",   action="store_true",
+                    help="Upload zipped dataset to CESNET S3 after processing")
+    ap.add_argument("--dry-run",  action="store_true",
+                    help="Print plan but do not write files")
+    args = ap.parse_args()
+
+    if AICSImage is None:
+        raise ImportError("aicsimageio is required. Run: pip install aicsimageio 'aicsimageio[czi]'")
+
+    # ── Setup output directories ──────────────────────────────────────────
+    out_dir = Path(args.out)
+    for split in ("train", "val"):
+        (out_dir / split / "images").mkdir(parents=True, exist_ok=True)
+        (out_dir / split / "labels").mkdir(parents=True, exist_ok=True)
+
+    # ── Build species registry ────────────────────────────────────────────
+    registry = build_class_registry(args.root)
+    print(f"📋 Species registry: {registry}")
+
+    # ── Load optional YOLO model for pseudo-labelling ─────────────────────
+    yolo_model = None
+    if args.model and YOLO is not None:
+        print(f"🤖 Loading YOLO model: {args.model}")
+        yolo_model = YOLO(args.model)
+
+    # ── Process each .czi file ────────────────────────────────────────────
+    all_czis = sorted(Path(args.root).rglob("*.czi"))
+    print(f"🔍 Found {len(all_czis)} .czi files\n")
+
+    import csv
+    manifest = []
+    tile_counts = {"train": 0, "val": 0}
+    all_czi_summaries = []
+    t0 = time.time()
+
+    for czi_path in all_czis:
+        species = extract_species(czi_path)
+        class_id = registry.get(species)
+        if class_id is None:
+            print(f"  ⚠️ Unknown species '{species}' for {czi_path.name}, skipping.")
+            continue
+
+        qr = extract_qr_code(czi_path.name)
+        print(f"  🌸 {czi_path.name}")
+        print(f"     Species: {species} → class {class_id}  |  QR: {qr}")
+
+        if args.dry_run:
+            print("     [dry-run] Skipping file.")
+            continue
+
+        try:
+            img = AICSImage(str(czi_path))
+            ps  = img.physical_pixel_sizes
+            scale_um_px = float(ps.X) if ps.X else None
+            print(f"     Scale: {scale_um_px} µm/px  |  Dims: {img.dims}  |  Shape: {img.shape}")
+
+            print("     Computing Max-Z projection…", end="", flush=True)
+            rgb = get_mip_rgb(img, args.channels, grayscale=args.grayscale)
+            print(f" ✓  ({rgb.shape[0]}×{rgb.shape[1]} px)")
+
+            # Prepare overview image (resize longest edge to 4000px for better quality)
+            H_orig, W_orig = rgb.shape[:2]
+            scale_factor = min(4000.0 / H_orig, 4000.0 / W_orig)
+            new_W, new_H = int(W_orig * scale_factor), int(H_orig * scale_factor)
+            overview_rgb = cv2.resize(rgb, (new_W, new_H))
+            overview_bgr = cv2.cvtColor(overview_rgb, cv2.COLOR_RGB2BGR)
+            
+            # Save clean version immediately
+            clean_overview_path = out_dir / f"overview_{czi_path.stem}_clean.jpg"
+            cv2.imwrite(str(clean_overview_path), overview_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            
+            # Create an overlay for transparency
+            overview_overlay = overview_bgr.copy()
+
+            n_tiles = 0
+            for tile, tx, ty in tile_image(rgb, overlap=args.overlap):
+                split = "train" if random.random() < args.split else "val"
+                stem  = f"{species}_{czi_path.stem}_x{tx:06d}_y{ty:06d}"
+
+                img_path = out_dir / split / "images" / f"{stem}.jpg"
+                lbl_path = out_dir / split / "labels"  / f"{stem}.txt"
+
+                # BGR for OpenCV
+                cv2.imwrite(str(img_path), cv2.cvtColor(tile, cv2.COLOR_RGB2BGR),
+                            [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+                annotations = pseudo_label_tile(
+                    tile, yolo_model, class_id, scale_um_px, conf=args.conf
+                )
+                
+                lbl_lines = [ann[0] for ann in annotations]
+                if lbl_lines:
+                    lbl_path.write_text("\n".join(lbl_lines))
+
+                # Process annotations for overview & CSV
+                for line, c_conf in annotations:
+                    parts = line.strip().split()
+                    pts_norm = np.array(parts[1:], dtype=float).reshape(-1, 2)
+                    pts_tile_px = pts_norm * [tile.shape[1], tile.shape[0]]
+                    
+                    # Log for CSV summary
+                    area_um2 = cv2.contourArea(pts_tile_px.astype(np.float32)) * (scale_um_px**2) if scale_um_px else None
+                    all_czi_summaries.append({
+                        "CZI_File": czi_path.name,
+                        "Species": species,
+                        "Area_um2": round(area_um2, 2) if area_um2 else None
+                    })
+                    
+                    # Draw on overview overlay mask
+                    pts_orig_px = pts_tile_px + [tx, ty]
+                    pts_overview_px = (pts_orig_px * scale_factor).astype(np.int32).reshape((-1, 1, 2))
+                    # Draw filled purple area and outline
+                    # Draw on overview overlay mask
+                    pts_orig_px = pts_tile_px + [tx, ty]
+                    pts_overview_px = (pts_orig_px * scale_factor).astype(np.int32).reshape((-1, 1, 2))
+                    # Draw filled purple area and outline
+                    cv2.fillPoly(overview_overlay, [pts_overview_px], (200, 0, 200))
+                    cv2.polylines(overview_overlay, [pts_overview_px], True, (255, 0, 255), 2)
+                    
+                    # Draw the confidence probability text near the first point
+                    px, py = pts_overview_px[0][0]
+                    text_str = f"{c_conf:.2f}"
+                    cv2.putText(overview_overlay, text_str, (int(px) - 5, int(py) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2, cv2.LINE_AA)
+                    cv2.putText(overview_overlay, text_str, (int(px) - 5, int(py) - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
+                manifest.append({
+                    "tile_id":       stem,
+                    "species_code":  species,
+                    "class_id":      class_id,
+                    "source_czi":    czi_path.name,
+                    "x_offset_px":   tx,
+                    "y_offset_px":   ty,
+                    "um_per_px_x":   scale_um_px,
+                    "um_per_px_y":   scale_um_px,
+                    "z_method":      args.z,
+                    "channels_used": args.channels,
+                    "n_annotations": len(annotations),
+                    "split":         split,
+                    "qr_code":       qr,
+                })
+
+                tile_counts[split] += 1
+                n_tiles += 1
+
+            # Blend overlay for transparency
+            alpha = 0.4
+            overview_blended = cv2.addWeighted(overview_overlay, alpha, overview_bgr, 1 - alpha, 0)
+
+            # Save full image overview
+            overview_path = out_dir / f"overview_{czi_path.stem}_labeled.jpg"
+            cv2.imwrite(str(overview_path), overview_blended, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            print(f"     ✅ {n_tiles} tiles extracted. Overviews saved as _clean and _labeled.")
+
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ❌ Failed: {exc}")
+
+    if args.dry_run:
+        print("\n[dry-run] No files written.")
+        return
+
+    # ── Write data.yaml ───────────────────────────────────────────────────
+    names_yaml = "\n".join(
+        f"  {i}: {name}"
+        for name, i in sorted(registry.items(), key=lambda kv: kv[1])
+    )
+    yaml_content = (
+        f"path: {out_dir.resolve()}\n"
+        f"train: train/images\n"
+        f"val:   val/images\n"
+        f"nc: {len(registry)}\n"
+        f"names:\n{names_yaml}\n"
+    )
+    (out_dir / "data.yaml").write_text(yaml_content)
+
+    # ── Write manifest & summary table ────────────────────────────────────
+    manifest_path = out_dir / "tile_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    
+    csv_path = out_dir / "summary_results.csv"
+    if all_czi_summaries:
+        keys = all_czi_summaries[0].keys()
+        with open(csv_path, 'w', newline='') as f:
+            dict_writer = csv.DictWriter(f, fieldnames=keys)
+            dict_writer.writeheader()
+            dict_writer.writerows(all_czi_summaries)
+    else:
+        csv_path.write_text("CZI_File,Species,Area_um2\n") # Empty structure
+
+    elapsed = time.time() - t0
+    total = sum(tile_counts.values())
+    print(f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"✅ Done in {elapsed:.1f}s")
+    print(f"   {tile_counts['train']} train tiles  |  {tile_counts['val']} val tiles  |  {total} total")
+    print(f"   data.yaml     → {out_dir / 'data.yaml'}")
+    print(f"   tile_manifest → {manifest_path}")
+    print(f"   summary csv   → {csv_path}")
+
+    # ── Optional S3 upload ────────────────────────────────────────────────
+    if args.upload and boto3 is not None:
+        zip_path = str(out_dir) + ".zip"
+        print(f"\n📦 Zipping dataset to {zip_path}…")
+        shutil.make_archive(str(out_dir), "zip", str(out_dir))
+        s3_resource, bucket = setup_s3()
+        if s3_resource:
+            zip_path = f"{out_dir}.zip"
+            dataset_name = out_dir.name
+            s3_prefix = os.environ.get('S3_PREFIX', 'PROJECT_PREFIX')
+            s3_key = f"{s3_prefix}/Detected/{dataset_name}.zip"
+            print(f"☁️  Uploading to s3://{bucket}/{s3_key}…")
+            upload_zip_to_s3(s3_resource, bucket, zip_path, s3_key)
+        else:
+            print("⚠️  S3 credentials not found. Skipping upload.")
+
+
+if __name__ == "__main__":
+    main()

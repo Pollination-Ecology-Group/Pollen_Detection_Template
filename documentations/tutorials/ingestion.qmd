@@ -1,0 +1,71 @@
+---
+title: "Ingestion Guide"
+---
+
+The CZI Ingestion Pipeline converts raw Zeiss `.czi` scans into 640x640 JPG tiles formatted for YOLO training.
+
+## 🏗️ Prerequisites
+
+Ensure you have initialized the virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+# Use the IPv4 wrapper if you experience network hangs
+python3 pip_ipv4.py install -r requirements.txt
+```
+
+## 📂 Source Data Structure
+
+The script expects a directory structure where species codes are embedded in folder names:
+
+```text
+/path/to/data/
+├── Ran_ado/
+│   ├── Source/
+│   │   ├── scan_001.czi
+│   │   └── scan_002.czi
+├── Ran_rep/
+│   └── ...
+```
+
+## 🛠️ Running the Ingest
+
+### Option A: Kubernetes Cluster (S3 Upload)
+Best for large batches. This utilizes the cluster's RAM to process all files and uploads a zipped `.zip` file archive to S3.
+```bash
+python k8s/deploy_czi.sh
+```
+
+### Option B: Local Execution (Direct to Cloud Mount)
+Best for bypassing S3 staging zip files and generating tiles directly onto a mounted drive for immediate Roboflow access.
+
+```bash
+# Ensure you are using the virtual environment
+source .venv/bin/activate
+
+python src/czi_ingest.py \
+    --root /home/meow/cesnet_cloud/bucket/{{S3_PREFIX}}/Source/ \
+    --out /home/meow/cesnet_cloud/bucket/{{S3_PREFIX}}/pollen_czi_v1 \
+    --channels 0 1 2 \
+    --grayscale
+```
+
+### Key Parameters
+
+| Flag | Description |
+|------|-------------|
+| `--root` | Deepest root directory to scan for .czi files |
+| `--out` | Target directory for images, labels, and data.yaml |
+| `--channels` | Indices of fluorescence channels to use for R, G, B |
+| `--grayscale` | Forces output to neutral grayscale instead of red (critical for manual Roboflow annotation) |
+| `--split` | Train/Val ratio (e.g. 0.8 = 80% training data) |
+| `--dry-run` | Preview the file list without writing to disk |
+
+## 📐 Resolution & Scaling
+
+The pipeline automatically extracts the `PhysicalSizeX` metadata from the CZI. This is crucial for:
+1. Scaling measurements in the final analysis.
+2. Filtering debris based on physical area (pollen grains are typically 10–100µm).
+
+Currently, the **{{PROJECT_TITLE_CASE}}** scans processed show a resolution of **~0.88 µm/px**.
