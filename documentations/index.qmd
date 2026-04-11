@@ -48,6 +48,16 @@ graph LR
 Pipeline from Raw Data to Biological Insights
 :::
 
+## 🤖 Deploying a New Project
+
+This repository serves as a master template. To quickly adapt it for a new specific project, you can leverage the built-in AI agent workflow. 
+
+Simply open this repository in VS Code, invoke the AI agent, and paste the following prompt:
+
+> **"Please run the `/adapt_project` workflow to configure this Pollen Detection Template for my new project."**
+
+The agent will prompt you for the new Project Name, Target Pollen Species List, S3 Bucket details, and GitHub Organization, and will cleanly automate the deployment by renaming configurations and rewriting manifests.
+
 ## 📖 Get Started
 
 Check the following sections to get up and running:

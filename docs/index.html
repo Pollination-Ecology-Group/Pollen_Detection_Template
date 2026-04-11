@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>{{PROJECT_TITLE_CASE}} Pollen Detection Pipeline – Colorado Pollen Discovery</title>
+<title>{{PROJECT_TITLE_CASE}} Pollen Detection Pipeline – Pollen detector</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -249,7 +249,7 @@ ul.task-list li input[type="checkbox"] {
     <a href="./index.html" class="navbar-brand navbar-brand-logo">
     </a>
     <a class="navbar-brand" href="./index.html">
-    <span class="navbar-title">Colorado Pollen Discovery</span>
+    <span class="navbar-title">Pollen detector</span>
     </a>
   </div>
             <div id="quarto-search" class="" title="Search"></div>
@@ -277,7 +277,7 @@ ul.task-list li input[type="checkbox"] {
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item compact">
-    <a class="nav-link" href="https://github.com/jakubstenc/colorado_pollen"> <i class="bi bi-github" role="img">
+    <a class="nav-link" href="https://github.com/Pollination-Ecology-Group/colorado_pollen"> <i class="bi bi-github" role="img">
 </i> 
 <span class="menu-text"></span></a>
   </li>  
@@ -302,7 +302,8 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#data-storage-policy" id="toc-data-storage-policy" class="nav-link" data-scroll-target="#data-storage-policy"><span class="header-section-number">2</span> 📦 Data Storage Policy</a></li>
   <li><a href="#roboflow-annotation" id="toc-roboflow-annotation" class="nav-link" data-scroll-target="#roboflow-annotation"><span class="header-section-number">3</span> 🏷️ Roboflow Annotation</a></li>
   <li><a href="#pipeline-overview" id="toc-pipeline-overview" class="nav-link" data-scroll-target="#pipeline-overview"><span class="header-section-number">4</span> 🛠️ Pipeline Overview</a></li>
-  <li><a href="#get-started" id="toc-get-started" class="nav-link" data-scroll-target="#get-started"><span class="header-section-number">5</span> 📖 Get Started</a></li>
+  <li><a href="#deploying-a-new-project" id="toc-deploying-a-new-project" class="nav-link" data-scroll-target="#deploying-a-new-project"><span class="header-section-number">5</span> 🤖 Deploying a New Project</a></li>
+  <li><a href="#get-started" id="toc-get-started" class="nav-link" data-scroll-target="#get-started"><span class="header-section-number">6</span> 📖 Get Started</a></li>
   </ul>
 </nav>
     </div>
@@ -390,8 +391,17 @@ Figure&nbsp;1: Pipeline from Raw Data to Biological Insights
 </figure>
 </div>
 </section>
-<section id="get-started" class="level2" data-number="5">
-<h2 data-number="5" class="anchored" data-anchor-id="get-started"><span class="header-section-number">5</span> 📖 Get Started</h2>
+<section id="deploying-a-new-project" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="deploying-a-new-project"><span class="header-section-number">5</span> 🤖 Deploying a New Project</h2>
+<p>This repository serves as a master template. To quickly adapt it for a new specific project, you can leverage the built-in AI agent workflow.</p>
+<p>Simply open this repository in VS Code, invoke the AI agent, and paste the following prompt:</p>
+<blockquote class="blockquote">
+<p><strong>“Please run the <code>/adapt_project</code> workflow to configure this Pollen Detection Template for my new project.”</strong></p>
+</blockquote>
+<p>The agent will prompt you for the new Project Name, Target Pollen Species List, S3 Bucket details, and GitHub Organization, and will cleanly automate the deployment by renaming configurations and rewriting manifests.</p>
+</section>
+<section id="get-started" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="get-started"><span class="header-section-number">6</span> 📖 Get Started</h2>
 <p>Check the following sections to get up and running:</p>
 <ul>
 <li><a href="./tutorials/ingestion.html">Ingestion Tutorial</a>: How to convert your first .czi folder.</li>

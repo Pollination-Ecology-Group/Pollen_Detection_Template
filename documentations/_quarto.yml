@@ -9,7 +9,7 @@ project:
 
 
 website:
-  title: "Colorado Pollen Discovery"
+  title: "Pollen detector"
   description: "Automated CZI Image Analysis and Pollen Classification"
   navbar:
     background: "#0d1117"
