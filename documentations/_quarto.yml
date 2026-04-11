@@ -29,8 +29,9 @@ website:
 
 format:
   html:
-    theme:
-      dark: [cosmo, styles.css]
+    theme: darkly
+    highlight-style: github-dark
+    css: styles.css
     code-fold: true
     code-summary: "Show the code"
     toc: true
