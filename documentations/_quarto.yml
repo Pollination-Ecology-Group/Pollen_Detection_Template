@@ -5,6 +5,7 @@ project:
     - index.qmd
     - tutorials/ingestion.qmd
     - tutorials/species_pipeline.qmd
+    - tutorials/cesnet_yolo_training.qmd
     - results.qmd
 
 
@@ -21,6 +22,8 @@ website:
         text: Ingestion Guide
       - href: tutorials/species_pipeline.qmd
         text: Species Pipeline
+      - href: tutorials/cesnet_yolo_training.qmd
+        text: General YOLO on CESNET
       - href: results.qmd
         text: Results
     right:

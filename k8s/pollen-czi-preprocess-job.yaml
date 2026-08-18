@@ -1,10 +1,10 @@
 # k8s/pollen-czi-preprocess-job.yaml
-# Kubernetes job for CZI → YOLO tile extraction on CESNET ({{NAMESPACE}}).
+# Kubernetes job for CZI → YOLO tile extraction on CESNET (stenc-ns).
 #
 # Usage:
 #   # Set image name after docker push:
 #   sed 's|IMAGE_PLACEHOLDER|ttl.sh/pollen-czi-abc123:24h|g' \
-#       k8s/pollen-czi-preprocess-job.yaml | kubectl apply -f - --kubeconfig=kubeconfig.yaml -n {{NAMESPACE}}
+#       k8s/pollen-czi-preprocess-job.yaml | kubectl apply -f - --kubeconfig=kubeconfig.yaml -n stenc-ns
 #
 # The job will:
 #   1. Download source .czi files from S3 (or use PVC if available)
@@ -15,7 +15,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: pollen-czi-preprocess
-  namespace: {{NAMESPACE}}
+  namespace: stenc-ns
 spec:
   template:
     spec:
@@ -36,8 +36,8 @@ spec:
             - -c
             - |
               aws --endpoint-url "$S3_ENDPOINT" s3 sync \
-                "s3://$S3_BUCKET/{{S3_PREFIX}}/Source/" \
-                /mnt/czi_data/ \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Cal_chi/" \
+                /mnt/czi_data/Cal_chi/ \
                 --exclude "*" --include "*.czi" \
                 --no-verify-ssl
           securityContext:

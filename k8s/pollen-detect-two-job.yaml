@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: pollen-detect-two
-  namespace: {{NAMESPACE}}
+  namespace: stenc-ns
 spec:
   template:
     spec:
@@ -21,15 +21,15 @@ spec:
             - -c
             - |
               aws --endpoint-url "$S3_ENDPOINT" s3 cp \
-                "s3://$S3_BUCKET/{{S3_PREFIX}}/Source/Ran_ado/20251031_066_pol_pro_Ran_ado_2025_4_{{DATETIME_MARKER}}.czi" \
-                /mnt/czi_data/20251031_066_pol_pro_Ran_ado_2025_4_{{DATETIME_MARKER}}.czi \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Ran_ado/20251031_066_pol_pro_Ran_ado_2025_4_Colorado2025.czi" \
+                /mnt/czi_data/20251031_066_pol_pro_Ran_ado_2025_4_Colorado2025.czi \
                 --no-verify-ssl
               aws --endpoint-url "$S3_ENDPOINT" s3 cp \
-                "s3://$S3_BUCKET/{{S3_PREFIX}}/Source/Ran_ado/20251031_071_pol_pro_Ran_ado_2025_9_{{DATETIME_MARKER}}.czi" \
-                /mnt/czi_data/20251031_071_pol_pro_Ran_ado_2025_9_{{DATETIME_MARKER}}.czi \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Ran_ado/20251031_071_pol_pro_Ran_ado_2025_9_Colorado2025.czi" \
+                /mnt/czi_data/20251031_071_pol_pro_Ran_ado_2025_9_Colorado2025.czi \
                 --no-verify-ssl
               aws --endpoint-url "$S3_ENDPOINT" s3 cp \
-                "s3://$S3_BUCKET/{{S3_PREFIX}}/trained_models/general_pollen/latest.pt" \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/general_pollen/latest.pt" \
                 /mnt/model/best.pt \
                 --no-verify-ssl
           securityContext:

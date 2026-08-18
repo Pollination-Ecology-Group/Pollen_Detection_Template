@@ -6,8 +6,9 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
+<meta name="description" content="A guide to running general YOLO training using CESNET MetaCentrum KáS (Kubernetes as a Service) with an academic identity.">
 
-<title>Ingestion Guide – Pollen detector</title>
+<title>General YOLO Training on CESNET Kubernetes (KáS) – Pollen detector</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -132,7 +133,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Home</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link active" href="../tutorials/ingestion.html" aria-current="page"> 
+    <a class="nav-link" href="../tutorials/ingestion.html"> 
 <span class="menu-text">Ingestion Guide</span></a>
   </li>  
   <li class="nav-item">
@@ -140,7 +141,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span class="menu-text">Species Pipeline</span></a>
   </li>  
   <li class="nav-item">
-    <a class="nav-link" href="../tutorials/cesnet_yolo_training.html"> 
+    <a class="nav-link active" href="../tutorials/cesnet_yolo_training.html" aria-current="page"> 
 <span class="menu-text">General YOLO on CESNET</span></a>
   </li>  
   <li class="nav-item">
@@ -170,15 +171,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#prerequisites" id="toc-prerequisites" class="nav-link active" data-scroll-target="#prerequisites"><span class="header-section-number">1</span> 🏗️ Prerequisites</a></li>
-  <li><a href="#source-data-structure" id="toc-source-data-structure" class="nav-link" data-scroll-target="#source-data-structure"><span class="header-section-number">2</span> 📂 Source Data Structure</a></li>
-  <li><a href="#running-the-ingest" id="toc-running-the-ingest" class="nav-link" data-scroll-target="#running-the-ingest"><span class="header-section-number">3</span> 🛠️ Running the Ingest</a>
-  <ul class="collapse">
-  <li><a href="#option-a-kubernetes-cluster-s3-upload" id="toc-option-a-kubernetes-cluster-s3-upload" class="nav-link" data-scroll-target="#option-a-kubernetes-cluster-s3-upload"><span class="header-section-number">3.1</span> Option A: Kubernetes Cluster (S3 Upload)</a></li>
-  <li><a href="#option-b-local-execution-direct-to-cloud-mount" id="toc-option-b-local-execution-direct-to-cloud-mount" class="nav-link" data-scroll-target="#option-b-local-execution-direct-to-cloud-mount"><span class="header-section-number">3.2</span> Option B: Local Execution (Direct to Cloud Mount)</a></li>
-  <li><a href="#key-parameters" id="toc-key-parameters" class="nav-link" data-scroll-target="#key-parameters"><span class="header-section-number">3.3</span> Key Parameters</a></li>
-  </ul></li>
-  <li><a href="#resolution-scaling" id="toc-resolution-scaling" class="nav-link" data-scroll-target="#resolution-scaling"><span class="header-section-number">4</span> 📐 Resolution &amp; Scaling</a></li>
+  <li><a href="#prerequisites" id="toc-prerequisites" class="nav-link active" data-scroll-target="#prerequisites"><span class="header-section-number">1</span> 1. Prerequisites</a></li>
+  <li><a href="#accessing-kubernetes-kás" id="toc-accessing-kubernetes-kás" class="nav-link" data-scroll-target="#accessing-kubernetes-kás"><span class="header-section-number">2</span> 2. Accessing Kubernetes (KáS)</a></li>
+  <li><a href="#setting-up-secrets" id="toc-setting-up-secrets" class="nav-link" data-scroll-target="#setting-up-secrets"><span class="header-section-number">3</span> 3. Setting Up Secrets</a></li>
+  <li><a href="#preparing-the-dataset-on-s3" id="toc-preparing-the-dataset-on-s3" class="nav-link" data-scroll-target="#preparing-the-dataset-on-s3"><span class="header-section-number">4</span> 4. Preparing the Dataset on S3</a></li>
+  <li><a href="#adjusting-the-training-script" id="toc-adjusting-the-training-script" class="nav-link" data-scroll-target="#adjusting-the-training-script"><span class="header-section-number">5</span> 5. Adjusting the Training Script</a></li>
+  <li><a href="#launching-the-training-job" id="toc-launching-the-training-job" class="nav-link" data-scroll-target="#launching-the-training-job"><span class="header-section-number">6</span> 6. Launching the Training Job</a></li>
+  <li><a href="#monitoring-and-retrieving-results" id="toc-monitoring-and-retrieving-results" class="nav-link" data-scroll-target="#monitoring-and-retrieving-results"><span class="header-section-number">7</span> 7. Monitoring and Retrieving Results</a></li>
+  <li><a href="#alternative-training-locally-on-your-own-computer" id="toc-alternative-training-locally-on-your-own-computer" class="nav-link" data-scroll-target="#alternative-training-locally-on-your-own-computer"><span class="header-section-number">8</span> Alternative: Training Locally (On Your Own Computer)</a></li>
   </ul>
 </nav>
     </div>
@@ -187,9 +187,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Ingestion Guide</h1>
+<h1 class="title">General YOLO Training on CESNET Kubernetes (KáS)</h1>
 </div>
 
+<div>
+  <div class="description">
+    A guide to running general YOLO training using CESNET MetaCentrum KáS (Kubernetes as a Service) with an academic identity.
+  </div>
+</div>
 
 
 <div class="quarto-title-meta">
@@ -204,91 +209,99 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>The CZI Ingestion Pipeline converts raw Zeiss <code>.czi</code> scans into 640x640 JPG tiles formatted for YOLO training.</p>
+<p>This guide explains how your colleague can adapt the pipeline to run general YOLOv8 training (not limited to pollen detection) on the CESNET infrastructure.</p>
 <section id="prerequisites" class="level2" data-number="1">
-<h2 data-number="1" class="anchored" data-anchor-id="prerequisites"><span class="header-section-number">1</span> 🏗️ Prerequisites</h2>
-<p>Ensure you have initialized the virtual environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python3</span> <span class="at">-m</span> venv .venv</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Use the IPv4 wrapper if you experience network hangs</span></span>
-<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="ex">python3</span> pip_ipv4.py install <span class="at">-r</span> requirements.txt</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<h2 data-number="1" class="anchored" data-anchor-id="prerequisites"><span class="header-section-number">1</span> 1. Prerequisites</h2>
+<p>Before starting, ensure you have: - <strong>Academic Identity (eduID.cz):</strong> Used to log into CESNET services. - <strong>CESNET MetaCentrum KáS Access:</strong> You need an active project in the CESNET Kubernetes (Rancher) environment. - <strong>S3 Object Storage:</strong> Access to CESNET Object Storage (e.g., <code>s3.cl4.du.cesnet.cz</code>) to store training datasets and save trained models.</p>
 </section>
-<section id="source-data-structure" class="level2" data-number="2">
-<h2 data-number="2" class="anchored" data-anchor-id="source-data-structure"><span class="header-section-number">2</span> 📂 Source Data Structure</h2>
-<p>The script expects a directory structure where species codes are embedded in folder names:</p>
-<pre class="text"><code>/path/to/data/
-├── Ran_ado/
-│   ├── Source/
-│   │   ├── scan_001.czi
-│   │   └── scan_002.czi
-├── Ran_rep/
-│   └── ...</code></pre>
+<section id="accessing-kubernetes-kás" class="level2" data-number="2">
+<h2 data-number="2" class="anchored" data-anchor-id="accessing-kubernetes-kás"><span class="header-section-number">2</span> 2. Accessing Kubernetes (KáS)</h2>
+<ol type="1">
+<li>Log into the CESNET Rancher UI using your academic identity.</li>
+<li>Select or create your Project/Namespace (e.g., <code>yolo-training-ns</code>).</li>
+<li>Click on your cluster and download the <strong>KubeConfig</strong> file.</li>
+<li>Save this file as <code>kubeconfig.yaml</code> in the root folder of this repository.</li>
+</ol>
+<blockquote class="blockquote">
+<p>[!TIP] The deployment scripts (like <code>deploy_train.sh</code>) automatically check for a <code>./kubeconfig.yaml</code> file in the current directory, so you don’t need to manually configure <code>export KUBECONFIG</code>.</p>
+</blockquote>
 </section>
-<section id="running-the-ingest" class="level2" data-number="3">
-<h2 data-number="3" class="anchored" data-anchor-id="running-the-ingest"><span class="header-section-number">3</span> 🛠️ Running the Ingest</h2>
-<section id="option-a-kubernetes-cluster-s3-upload" class="level3" data-number="3.1">
-<h3 data-number="3.1" class="anchored" data-anchor-id="option-a-kubernetes-cluster-s3-upload"><span class="header-section-number">3.1</span> Option A: Kubernetes Cluster (S3 Upload)</h3>
-<p>Best for large batches. This utilizes the cluster’s RAM to process all files and uploads a zipped <code>.zip</code> file archive to S3.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> k8s/deploy_czi.sh</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="setting-up-secrets" class="level2" data-number="3">
+<h2 data-number="3" class="anchored" data-anchor-id="setting-up-secrets"><span class="header-section-number">3</span> 3. Setting Up Secrets</h2>
+<p>Your training pod needs access to S3 to download the dataset and upload the final model.</p>
+<p>First, create a Kubernetes secret for your S3 credentials in your namespace. You can run this command locally (ensure <code>kubectl</code> points to your CESNET cluster):</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Replace YOUR_NAMESPACE with the namespace you created in Rancher</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">kubectl</span> create secret generic s3-credentials <span class="dt">\</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--from-literal</span><span class="op">=</span>access-key=<span class="st">'YOUR_S3_ACCESS_KEY'</span> <span class="dt">\</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--from-literal</span><span class="op">=</span>secret-key=<span class="st">'YOUR_S3_SECRET_KEY'</span> <span class="dt">\</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">-n</span> YOUR_NAMESPACE</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><em>(Optional)</em> If you use email notifications upon training completion:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">kubectl</span> create secret generic email-credentials <span class="dt">\</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">--from-literal</span><span class="op">=</span>GMAIL_APP_PASSWORD=<span class="st">'YOUR_APP_PASSWORD'</span> <span class="dt">\</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">-n</span> YOUR_NAMESPACE</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="option-b-local-execution-direct-to-cloud-mount" class="level3" data-number="3.2">
-<h3 data-number="3.2" class="anchored" data-anchor-id="option-b-local-execution-direct-to-cloud-mount"><span class="header-section-number">3.2</span> Option B: Local Execution (Direct to Cloud Mount)</h3>
-<p>Best for bypassing S3 staging zip files and generating tiles directly onto a mounted drive for immediate Roboflow access.</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Ensure you are using the virtual environment</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="bu">source</span> .venv/bin/activate</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> src/czi_ingest.py <span class="dt">\</span></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    <span class="at">--root</span> /home/meow/cesnet_cloud/bucket/{{S3_PREFIX}}/Source/ <span class="dt">\</span></span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>    <span class="at">--out</span> /home/meow/cesnet_cloud/bucket/{{S3_PREFIX}}/pollen_czi_v1 <span class="dt">\</span></span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>    <span class="at">--channels</span> 0 1 2 <span class="dt">\</span></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">--grayscale</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="preparing-the-dataset-on-s3" class="level2" data-number="4">
+<h2 data-number="4" class="anchored" data-anchor-id="preparing-the-dataset-on-s3"><span class="header-section-number">4</span> 4. Preparing the Dataset on S3</h2>
+<p>Upload your YOLO-formatted dataset (images and labels) to your CESNET S3 bucket.</p>
+<p>Next, modify <code>k8s/pollen-general-train-job.yaml</code> to point to your specific dataset:</p>
+<ol type="1">
+<li><strong>Update the Namespace:</strong> Change <code>namespace: stenc-ns</code> to your namespace.</li>
+<li><strong>Update Environment Variables:</strong></li>
+</ol>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">env</span><span class="kw">:</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> S3_ENDPOINT</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">value</span><span class="kw">:</span><span class="at"> </span><span class="st">"https://s3.cl4.du.cesnet.cz"</span><span class="co"> # Or your specific S3 endpoint</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> </span><span class="fu">name</span><span class="kw">:</span><span class="at"> S3_BUCKET</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="at">    </span><span class="fu">value</span><span class="kw">:</span><span class="at"> </span><span class="st">"your-bucket-name"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<ol start="3" type="1">
+<li><strong>Update S3 Sync Paths:</strong> Under the <code>command</code> section in the YAML, change the <code>aws s3 sync</code> commands to download your data instead of the pollen data:</li>
+</ol>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Example: Downloading your general YOLO dataset</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">aws</span> <span class="at">--endpoint-url</span> <span class="st">"</span><span class="va">$S3_ENDPOINT</span><span class="st">"</span> s3 sync <span class="st">"s3://</span><span class="va">$S3_BUCKET</span><span class="st">/Path/To/Your/Dataset/"</span> /app/Dataset/ <span class="at">--no-verify-ssl</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="key-parameters" class="level3" data-number="3.3">
-<h3 data-number="3.3" class="anchored" data-anchor-id="key-parameters"><span class="header-section-number">3.3</span> Key Parameters</h3>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 31%">
-<col style="width: 68%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Flag</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>--root</code></td>
-<td>Deepest root directory to scan for .czi files</td>
-</tr>
-<tr class="even">
-<td><code>--out</code></td>
-<td>Target directory for images, labels, and data.yaml</td>
-</tr>
-<tr class="odd">
-<td><code>--channels</code></td>
-<td>Indices of fluorescence channels to use for R, G, B</td>
-</tr>
-<tr class="even">
-<td><code>--grayscale</code></td>
-<td>Forces output to neutral grayscale instead of red (critical for manual Roboflow annotation)</td>
-</tr>
-<tr class="odd">
-<td><code>--split</code></td>
-<td>Train/Val ratio (e.g.&nbsp;0.8 = 80% training data)</td>
-</tr>
-<tr class="even">
-<td><code>--dry-run</code></td>
-<td>Preview the file list without writing to disk</td>
-</tr>
-</tbody>
-</table>
+<section id="adjusting-the-training-script" class="level2" data-number="5">
+<h2 data-number="5" class="anchored" data-anchor-id="adjusting-the-training-script"><span class="header-section-number">5</span> 5. Adjusting the Training Script</h2>
+<p>The training is handled by <code>src/train_general.py</code>. If your dataset path or training parameters differ, make sure <code>train_general.py</code> and the environment variables exported in <code>pollen-general-train-job.yaml</code> match.</p>
+<p>Example update in <code>k8s/pollen-general-train-job.yaml</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">DATASET_ROOT</span><span class="op">=</span>/app/Dataset</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">MODEL_DIR</span><span class="op">=</span>/app/models/my_yolo_model/</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">python3</span> /scripts/train_general.py</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
+<section id="launching-the-training-job" class="level2" data-number="6">
+<h2 data-number="6" class="anchored" data-anchor-id="launching-the-training-job"><span class="header-section-number">6</span> 6. Launching the Training Job</h2>
+<p>The pipeline uses <code>ttl.sh</code>, an anonymous, ephemeral Docker registry. This allows you to build and push Docker images directly from your local machine to the CESNET cluster without needing to set up a private Docker registry.</p>
+<p>Update <code>deploy_train.sh</code> to point to your namespace by changing <code>NAMESPACE="stenc-ns"</code> to <code>NAMESPACE="YOUR_NAMESPACE"</code>.</p>
+<p>Deploy the training job:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./deploy_train.sh</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="resolution-scaling" class="level2" data-number="4">
-<h2 data-number="4" class="anchored" data-anchor-id="resolution-scaling"><span class="header-section-number">4</span> 📐 Resolution &amp; Scaling</h2>
-<p>The pipeline automatically extracts the <code>PhysicalSizeX</code> metadata from the CZI. This is crucial for: 1. Scaling measurements in the final analysis. 2. Filtering debris based on physical area (pollen grains are typically 10–100µm).</p>
-<p>Currently, the <strong>{{PROJECT_TITLE_CASE}}</strong> scans processed show a resolution of <strong>~0.88 µm/px</strong>.</p>
+<section id="monitoring-and-retrieving-results" class="level2" data-number="7">
+<h2 data-number="7" class="anchored" data-anchor-id="monitoring-and-retrieving-results"><span class="header-section-number">7</span> 7. Monitoring and Retrieving Results</h2>
+<p>Monitor the training progress via the Rancher UI or CLI:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">kubectl</span> logs <span class="at">-f</span> pod/pollen-train-general <span class="at">-n</span> YOUR_NAMESPACE</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Once the training finishes, the script uses <code>s5cmd</code> to automatically sync the best model weights back to your S3 bucket.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Look for this in the YAML command block to see where it uploads</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">s5cmd</span> <span class="at">--endpoint-url</span> <span class="st">"</span><span class="va">$S3_ENDPOINT</span><span class="st">"</span> <span class="at">--no-verify-ssl</span> sync <span class="st">"/app/models/my_yolo_model/*"</span> <span class="st">"s3://</span><span class="va">$S3_BUCKET</span><span class="st">/Path/To/Output/"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="alternative-training-locally-on-your-own-computer" class="level2" data-number="8">
+<h2 data-number="8" class="anchored" data-anchor-id="alternative-training-locally-on-your-own-computer"><span class="header-section-number">8</span> Alternative: Training Locally (On Your Own Computer)</h2>
+<p>If you do not want to use CESNET Kubernetes or S3 and just want to run the training pipeline directly on your own computer (assuming you have a local GPU and Python installed), you can bypass the K8s configuration entirely.</p>
+<ol type="1">
+<li><p><strong>Install Dependencies:</strong> Make sure you have Ultralytics and other required libraries installed in your local environment.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install ultralytics pyyaml</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div></li>
+<li><p><strong>Organize Your Local Data:</strong> Place your images and labels somewhere on your local drive.</p></li>
+<li><p><strong>Set Environment Variables and Run:</strong> The <code>src/train_general.py</code> script automatically adapts to local paths if you set the right environment variables. Open your terminal and run:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Point these to the folders on your local computer where your data lives</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">STAGED_AREA</span><span class="op">=</span>/path/to/my/local/positive_data</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">STAGED_NEGATIVES</span><span class="op">=</span>/path/to/my/local/negative_data</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">STAGED_CURATED</span><span class="op">=</span>/path/to/my/local/curated_data</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co"># Tell the script where to save the output model locally</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">MODEL_DIR</span><span class="op">=</span>./local_trained_model</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Run the training script directly</span></span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="ex">python3</span> src/train_general.py</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div></li>
+</ol>
+<p>This will automatically format the dataset into a temporary folder (<code>/tmp/general_pollen_dataset</code>), start YOLOv8 training using your local hardware, and save the final <code>.pt</code> weights into your chosen <code>MODEL_DIR</code>.</p>
 
 
 </section>

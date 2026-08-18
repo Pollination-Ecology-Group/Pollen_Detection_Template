@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pollen-build-species-dataset
+  name: pollen-extract-300
   namespace: stenc-ns
 spec:
   template:
@@ -14,25 +14,34 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
       initContainers:
-        - name: download-data
+        - name: s3-sync
           image: amazon/aws-cli:latest
           command:
             - sh
             - -c
             - |
-              echo "Downloading general_pollen model..."
-              aws --endpoint-url "$S3_ENDPOINT" s3 cp "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/general_pollen/latest.pt" /mnt/model/best.pt --no-verify-ssl
+              mkdir -p /mnt/czi_data/Ran_ado /mnt/czi_data/Vio_adu
+              
+              echo "Downloading Ran_ado files..."
+              aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Ran_ado/" --no-verify-ssl | grep .czi | awk '{print $4}' | head -n 2 | while read f; do
+                aws --endpoint-url "$S3_ENDPOINT" s3 cp "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Ran_ado/$f" "/mnt/czi_data/Ran_ado/$f" --no-verify-ssl
+              done
+
+              echo "Downloading Vio_adu files..."
+              aws --endpoint-url "$S3_ENDPOINT" s3 ls "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Vio_adu/" --no-verify-ssl | grep .czi | awk '{print $4}' | head -n 2 | while read f; do
+                aws --endpoint-url "$S3_ENDPOINT" s3 cp "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Vio_adu/$f" "/mnt/czi_data/Vio_adu/$f" --no-verify-ssl
+              done
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1Gi"
             limits:
-              cpu: "4"
-              memory: "8Gi"
+              cpu: "2"
+              memory: "2Gi"
           env:
             - name: S3_ENDPOINT
               value: "https://s3.cl4.du.cesnet.cz"
@@ -51,47 +60,33 @@ spec:
           volumeMounts:
             - mountPath: /mnt/czi_data
               name: scratch
-            - mountPath: /mnt/model
-              name: model-vol
       containers:
-        - name: dataset-builder
-          image: ttl.sh/pollen-species-builder:v9
+        - name: czi-preprocessor
+          image: ttl.sh/pollen-czi-anti-v2:24h
           imagePullPolicy: Always
           command:
-            - sh
-            - -c
-            - |
-              echo "Starting Species Dataset Builder..."
-              mkdir -p /app/Trainig_data
-              python3 /app/build_species_dataset.py \
-                --root /mnt/czi_data \
-                --out /app/Trainig_data \
-                --model /mnt/model/best.pt \
-                --conf 0.15
-                
-              echo "Uploading generated Species Datasets and Stats to S3..."
-              s5cmd --endpoint-url "$S3_ENDPOINT" --no-verify-ssl sync "/app/Trainig_data/*" "s3://$S3_BUCKET/PROJECT_PREFIX/Species_model/Trainig_data/"
-              
-              echo "Sending notification email..."
-              python3 /app/notify.py --type training --job_name "Species Dataset Builder"
+            - python
+            - extract_300.py
+            - --root
+            - /mnt/czi_data
+            - --out
+            - /tmp/dataset_300_per_species
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           resources:
             limits:
-              memory: "64Gi"
-              cpu: "8"
-            requests:
               memory: "32Gi"
               cpu: "4"
+            requests:
+              memory: "16Gi"
+              cpu: "2"
           env:
             - name: S3_ENDPOINT
               value: "https://s3.cl4.du.cesnet.cz"
             - name: S3_BUCKET
               value: "bucket"
-            - name: S3_PREFIX
-              value: "PROJECT_PREFIX"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -102,28 +97,23 @@ spec:
                 secretKeyRef:
                   name: s3-credentials
                   key: secret-key
-            - name: GMAIL_APP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: email-credentials
-                  key: GMAIL_APP_PASSWORD
           volumeMounts:
             - mountPath: /dev/shm
               name: dshm
             - mountPath: /mnt/czi_data
               name: scratch
-            - mountPath: /mnt/model
-              name: model-vol
+            - mountPath: /tmp
+              name: tmp
       volumes:
         - name: dshm
           emptyDir:
             medium: Memory
-            sizeLimit: "32Gi"
+            sizeLimit: "8Gi"
         - name: scratch
           emptyDir:
-            sizeLimit: "100Gi"
-        - name: model-vol
+            sizeLimit: "20Gi"
+        - name: tmp
           emptyDir:
-            sizeLimit: "1Gi"
+            sizeLimit: "50Gi"
       restartPolicy: Never
   backoffLimit: 1

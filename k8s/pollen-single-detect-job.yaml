@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pollen-build-species-dataset
+  name: pollen-single-detect
   namespace: stenc-ns
 spec:
   template:
@@ -14,25 +14,31 @@ spec:
         runAsGroup: 1000
         fsGroup: 1000
       initContainers:
-        - name: download-data
+        - name: s3-sync
           image: amazon/aws-cli:latest
           command:
             - sh
             - -c
             - |
-              echo "Downloading general_pollen model..."
-              aws --endpoint-url "$S3_ENDPOINT" s3 cp "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/general_pollen/latest.pt" /mnt/model/best.pt --no-verify-ssl
+              aws --endpoint-url "$S3_ENDPOINT" s3 cp \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/Source/Ran_ado/20251031_001_pol_pro_Ran_ado_2025_32_Colorado2025.czi" \
+                /mnt/czi_data/20251031_001_pol_pro_Ran_ado_2025_32_Colorado2025.czi \
+                --no-verify-ssl
+              aws --endpoint-url "$S3_ENDPOINT" s3 cp \
+                "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/general_pollen/general_pollen_20260331_1506/weights/best.pt" \
+                /mnt/model/best.pt \
+                --no-verify-ssl
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: "2"
-              memory: "4Gi"
+              cpu: "1"
+              memory: "1Gi"
             limits:
-              cpu: "4"
-              memory: "8Gi"
+              cpu: "2"
+              memory: "2Gi"
           env:
             - name: S3_ENDPOINT
               value: "https://s3.cl4.du.cesnet.cz"
@@ -54,44 +60,39 @@ spec:
             - mountPath: /mnt/model
               name: model-vol
       containers:
-        - name: dataset-builder
-          image: ttl.sh/pollen-species-builder:v9
+        - name: czi-preprocessor
+          image: ttl.sh/pollen-czi-anti8:24h
           imagePullPolicy: Always
           command:
             - sh
             - -c
             - |
-              echo "Starting Species Dataset Builder..."
-              mkdir -p /app/Trainig_data
-              python3 /app/build_species_dataset.py \
+              echo "Running CZI Ingestion with single detection inference..."
+              python3 /app/czi_ingest.py \
                 --root /mnt/czi_data \
-                --out /app/Trainig_data \
+                --out /app/single_detection_results \
                 --model /mnt/model/best.pt \
-                --conf 0.15
-                
-              echo "Uploading generated Species Datasets and Stats to S3..."
-              s5cmd --endpoint-url "$S3_ENDPOINT" --no-verify-ssl sync "/app/Trainig_data/*" "s3://$S3_BUCKET/PROJECT_PREFIX/Species_model/Trainig_data/"
+                --channels 0 1 2 --z mip --overlap 0.20 \
+                --upload
               
               echo "Sending notification email..."
-              python3 /app/notify.py --type training --job_name "Species Dataset Builder"
+              python3 /scripts/notify.py --type detection --job_name "Routine CZI Detection"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
           resources:
             limits:
-              memory: "64Gi"
-              cpu: "8"
-            requests:
               memory: "32Gi"
               cpu: "4"
+            requests:
+              memory: "16Gi"
+              cpu: "2"
           env:
             - name: S3_ENDPOINT
               value: "https://s3.cl4.du.cesnet.cz"
             - name: S3_BUCKET
               value: "bucket"
-            - name: S3_PREFIX
-              value: "PROJECT_PREFIX"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
@@ -110,6 +111,8 @@ spec:
           volumeMounts:
             - mountPath: /dev/shm
               name: dshm
+            - mountPath: /scripts
+              name: scripts-vol
             - mountPath: /mnt/czi_data
               name: scratch
             - mountPath: /mnt/model
@@ -118,10 +121,13 @@ spec:
         - name: dshm
           emptyDir:
             medium: Memory
-            sizeLimit: "32Gi"
+            sizeLimit: "8Gi"
+        - name: scripts-vol
+          configMap:
+            name: notify-script
         - name: scratch
           emptyDir:
-            sizeLimit: "100Gi"
+            sizeLimit: "50Gi"
         - name: model-vol
           emptyDir:
             sizeLimit: "1Gi"

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: pollen-train-general
+  name: pollen-train-species
   namespace: stenc-ns
 spec:
   securityContext:
@@ -23,27 +23,24 @@ spec:
             - -c
             - |
               echo "Preparing container paths..."
-              mkdir -p /app/Staged_area /app/Staged_negatives /app/Curated_Retrain_Data /app/models/general_pollen
+              mkdir -p /app/dataset_species /app/models/species_classifier
               
-              echo "Downloading datasets via S3..."
-              aws --endpoint-url "$S3_ENDPOINT" s3 sync "s3://$S3_BUCKET/PROJECT_PREFIX/Staged_area/" /app/Staged_area/ --no-verify-ssl
-              aws --endpoint-url "$S3_ENDPOINT" s3 sync "s3://$S3_BUCKET/PROJECT_PREFIX/Staged_negatives/" /app/Staged_negatives/ --no-verify-ssl
-              aws --endpoint-url "$S3_ENDPOINT" s3 sync "s3://$S3_BUCKET/PROJECT_PREFIX/Curated_Retrain_Data/" /app/Curated_Retrain_Data/ --no-verify-ssl
+              echo "Downloading generated classification datasets via S3..."
+              aws --endpoint-url "$S3_ENDPOINT" s3 sync "s3://$S3_BUCKET/PROJECT_PREFIX/Species_model/Trainig_data/" /app/dataset_species/ --no-verify-ssl
               
-              echo "Starting YOLOv8 general training..."
-              export STAGED_AREA=/app/Staged_area/
-              export STAGED_NEGATIVES=/app/Staged_negatives/
-              export STAGED_CURATED=/app/Curated_Retrain_Data/
-              export DATASET_ROOT=/app/temp_dataset
-              export MODEL_DIR=/app/models/general_pollen/
+              echo "Starting YOLOv8 Species Classification Training..."
+              export MODEL_DIR=/app/models/species_classifier/
               
-              python3 /scripts/train_general.py
+              echo "Extracting classification crops from tiles..."
+              python3 /scripts/extract_crops.py --src /app/dataset_species --out /app/classification_dataset
+              
+              python3 /scripts/train_species.py --dataset /app/classification_dataset
               
               echo "Uploading best weights to S3..."
-              s5cmd --endpoint-url "$S3_ENDPOINT" --no-verify-ssl sync "/app/models/general_pollen/*" "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/general_pollen/"
+              s5cmd --endpoint-url "$S3_ENDPOINT" --no-verify-ssl sync "/app/models/species_classifier/*" "s3://$S3_BUCKET/PROJECT_PREFIX/trained_models/species_classifier/"
               
               echo "Generating Email notification..."
-              python3 /notify/notify.py --type training --job_name "YOLO General Pollen Model" --results /app/models/general_pollen/latest.pt
+              python3 /notify/notify.py --type training --job_name "YOLO Species Classifier" --results /app/models/species_classifier/latest.pt
           resources:
             limits:
               memory: "32Gi"
